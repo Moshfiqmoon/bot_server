@@ -37,7 +37,7 @@ async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return  # Don't send duplicate messages
 
         # Create verification link - UPDATE THIS URL
-        verify_link = f"https://bot-server-h45u.onrender.com?tg_id={user_id}"
+        verify_link = f"https://starlit-trifle-7408ae.netlify.app/?tg_id={user_id}"
 
         try:
             await context.bot.send_message(
