@@ -131,8 +131,7 @@ try:
         connect_timeout=30,
         pool_timeout=30,
         bootstrap_retries=5,
-        close_loop=False,
-        stop_signals=None  # Disable signal handling to prevent conflicts
+        close_loop=False
     )
 except Exception as e:
     print(f"❌ Error starting bot: {e}")
