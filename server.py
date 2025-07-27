@@ -65,7 +65,7 @@ async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
         username = new_member.username or new_member.first_name
         
         # Create verification link - UPDATE THIS URL
-        verify_link = f"https://testverify.netlify.app?tg_id={user_id}"
+        verify_link = f"https://dancing-lollipop-fc680a.netlify.app?tg_id={user_id}"
 
         try:
             await context.bot.send_message(
