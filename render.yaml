@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: bot-server
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: GROUP_ID
+        sync: false
+      - key: COLLECTION_ID
+        sync: false
+      - key: HELIUS_API_KEY
+        sync: false
+      - key: PORT
+        value: 5000 
