@@ -7,8 +7,13 @@ from verifier import has_nft
 import json
 
 load_dotenv()
+
+# Environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-GROUP_ID = int(os.getenv("GROUP_ID"))
+GROUP_ID = os.getenv("GROUP_ID")
+HELIUS_API_KEY = os.getenv("HELIUS_API_KEY", "6873bd5e-0b5d-49c4-a9ab-4e7febfd9cd3")
+COLLECTION_ID = os.getenv("COLLECTION_ID", "j7qeFNnpWTbaf5g9sMCxP2zfKrH5QFgE56SuYjQDQi1")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://meta-betties-api-server.onrender.com/api/verify-nft")
 
 user_pending_verification = {}
 
@@ -37,7 +42,7 @@ async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return  # Don't send duplicate messages
 
         # Create verification link - UPDATE THIS URL
-        verify_link = f"https://starlit-trifle-7408ae.netlify.app/?tg_id={user_id}"
+        verify_link = f"http://localhost:3000?tg_id={user_id}"
 
         try:
             await context.bot.send_message(
@@ -50,6 +55,9 @@ async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
 To access this private group, you must verify your NFT ownership.
 
 🔗 <b>Click here to verify:</b> <a href="{verify_link}">Verify NFT Ownership</a>
+
+📋 <b>Or copy this link:</b>
+<code>{verify_link}</code>
 
 ⏰ <b>Time Limit:</b> You have 5 minutes to complete verification, or you'll be automatically removed.
 
