@@ -5,7 +5,8 @@ import json
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters, CommandHandler
 from dotenv import load_dotenv
-from verifier_js import has_nft
+from flask import Flask, request, jsonify
+import threading
 
 load_dotenv()
 
@@ -14,13 +15,9 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")  # Changed from BOT_TOKEN
 GROUP_ID = os.getenv("TELEGRAM_GROUP_ID")    # Changed from GROUP_ID
 HELIUS_API_KEY = os.getenv("HELIUS_API_KEY", "6873bd5e-0b5d-49c4-a9ab-4e7febfd9cd3")
 COLLECTION_ID = os.getenv("COLLECTION_ID", "j7qeFNnpWTbaf5g9sMCxP2zfKrH5QFgE56SuYjQDQi1")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://api-server-wcjc.onrender.com/verify-nft")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://api-server-wcjc.onrender.com/api/verify-nft")
 
-# Check if required environment variables are set
-if not BOT_TOKEN:
-    print("❌ TELEGRAM_BOT_TOKEN not found in environment variables!")
-    print("💡 Please set TELEGRAM_BOT_TOKEN in your environment")
-    BOT_TOKEN = "test_token"  # Fallback for testing
+# Check if required environment variables are se
 
 if not GROUP_ID:
     print("❌ TELEGRAM_GROUP_ID not found in environment variables!")
@@ -32,6 +29,9 @@ print(f"  📱 TELEGRAM_BOT_TOKEN: {'✅ Set' if BOT_TOKEN != 'test_token' else 
 print(f"  👥 TELEGRAM_GROUP_ID: {'✅ Set' if GROUP_ID != 'test_group' else '❌ Missing'}")
 
 user_pending_verification = {}
+
+# Flask app for webhook
+flask_app = Flask(__name__)
 
 async def auto_remove_unverified(user_id, username, context):
     """Auto-remove user if not verified within 5 minutes"""
@@ -96,7 +96,7 @@ async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             
             # Create verification link - UPDATE THIS URL
-            verify_link = f"https://admin-q2j7.onrender.com?tg_id={user_id}"
+            verify_link = f"https://admin-q2j7.onrender.com/?tg_id={user_id}"
             print(f"🔗 Verification link: {verify_link}")
 
             try:
@@ -217,6 +217,113 @@ async def analytics(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Error reading analytics: {e}")
 
+# Webhook endpoints
+@flask_app.route('/verify_callback', methods=['POST'])
+def verify_callback():
+    """Receive verification results from API server"""
+    try:
+        data = request.json
+        tg_id = data.get('tg_id')
+        has_nft = data.get('has_nft')
+        username = data.get('username', f'user_{tg_id}')
+        
+        print(f"🔍 Verification callback received:")
+        print(f"  👤 User ID: {tg_id}")
+        print(f"  👤 Username: {username}")
+        print(f"  🎨 Has NFT: {has_nft}")
+        
+        if tg_id in user_pending_verification:
+            if has_nft:
+                # User has NFT - keep them in group
+                try:
+                    # Send success message to group
+                    success_message = f"""✅ <b>Verification Successful!</b>
+
+🎉 Congratulations @{username}! 
+
+💎 You have been verified as an NFT holder and now have full access to this private group.
+
+🔐 <b>Access Granted:</b> You can now participate in all discussions and access exclusive content.
+
+Welcome to the Meta Betties community! 🚀"""
+
+                    asyncio.run(app.bot.send_message(
+                        chat_id=GROUP_ID,
+                        text=success_message,
+                        parse_mode='HTML'
+                    ))
+                    
+                    # Log successful verification
+                    log_entry = {
+                        "timestamp": time.time(),
+                        "user_id": tg_id,
+                        "username": username,
+                        "status": "verified",
+                        "reason": "nft_verified"
+                    }
+                    
+                    with open("analytics.json", "a") as f:
+                        f.write(json.dumps(log_entry) + "\n")
+                    
+                    print(f"✅ User @{username} (ID: {tg_id}) verified successfully - KEPT IN GROUP")
+                    del user_pending_verification[tg_id]
+                    
+                except Exception as e:
+                    print(f"❌ Error sending success message: {e}")
+                    
+            else:
+                # User has no NFT - remove them from group
+                try:
+                    # Send removal message to group
+                    removal_message = f"""❌ <b>Verification Failed</b>
+
+😔 Sorry @{username}, your verification was unsuccessful.
+
+🚫 <b>Access Denied:</b> You do not have the required NFT to access this private group.
+
+💎 <b>Requirements:</b> You must own the required NFT collection to join this group.
+
+You will be removed from the group now."""
+
+                    asyncio.run(app.bot.send_message(
+                        chat_id=GROUP_ID,
+                        text=removal_message,
+                        parse_mode='HTML'
+                    ))
+                    
+                    # Remove user from group
+                    asyncio.run(app.bot.ban_chat_member(GROUP_ID, tg_id))
+                    asyncio.run(app.bot.unban_chat_member(GROUP_ID, tg_id))
+                    
+                    log_entry = {
+                        "timestamp": time.time(),
+                        "user_id": tg_id,
+                        "username": username,
+                        "status": "removed",
+                        "reason": "no_nft"
+                    }
+                    
+                    with open("analytics.json", "a") as f:
+                        f.write(json.dumps(log_entry) + "\n")
+                    
+                    print(f"❌ Removed @{username} (ID: {tg_id}) - no required NFT")
+                    del user_pending_verification[tg_id]
+                    
+                except Exception as e:
+                    print(f"❌ Error removing user: {e}")
+        else:
+            print(f"⚠️ User {tg_id} not in pending verification list")
+        
+        return jsonify({"status": "success", "message": "Verification result processed"})
+        
+    except Exception as e:
+        print(f"❌ Error in verify_callback: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@flask_app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({"status": "healthy", "service": "bot-server"})
+
 # Create app and add handler
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -277,5 +384,18 @@ except Exception as e:
     print("💡 Try stopping all Python processes and restart.")
     print("💡 If problem persists, try restarting your computer.")
     print("💡 You can also try using a different bot token temporarily.")
-    print("💡 Check if another bot instance is running in another terminal.") 
+    print("💡 Check if another bot instance is running in another terminal.")
 
+def run_flask():
+    """Run Flask server in a separate thread"""
+    port = int(os.getenv("PORT", 5000))
+    print(f"🌐 Webhook server starting on port {port}")
+    flask_app.run(host='0.0.0.0', port=port, debug=False)
+
+if __name__ == '__main__':
+    # Start Flask server in a separate thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
+    # Start the bot
+    print("🤖 Starting bot with webhook support...") 
