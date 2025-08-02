@@ -96,7 +96,7 @@ async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             
             # Create verification link - UPDATE THIS URL
-            verify_link = f"http://localhost:3000?tg_id={user_id}"
+            verify_link = f"https://admin-q2j7.onrender.com?tg_id={user_id}"
             print(f"🔗 Verification link: {verify_link}")
 
             try:
@@ -278,3 +278,4 @@ except Exception as e:
     print("💡 If problem persists, try restarting your computer.")
     print("💡 You can also try using a different bot token temporarily.")
     print("💡 Check if another bot instance is running in another terminal.") 
+
