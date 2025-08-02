@@ -17,6 +17,10 @@ HELIUS_API_KEY = os.getenv("HELIUS_API_KEY", "6873bd5e-0b5d-49c4-a9ab-4e7febfd9c
 COLLECTION_ID = os.getenv("COLLECTION_ID", "j7qeFNnpWTbaf5g9sMCxP2zfKrH5QFgE56SuYjQDQi1")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://api-server-wcjc.onrender.com/api/verify-nft")
 
+# Admin notification settings
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")  # Admin chat ID for notifications
+ADMIN_NOTIFICATIONS = os.getenv("ADMIN_NOTIFICATIONS", "true").lower() == "true"
+
 # Check if required environment variables are se
 
 if not GROUP_ID:
@@ -32,6 +36,80 @@ user_pending_verification = {}
 
 # Flask app for webhook
 flask_app = Flask(__name__)
+
+async def notify_admin_verification_success(user_id: int, username: str, nft_count: int, wallet_address: str = None):
+    """Notify admin about successful verification"""
+    if not ADMIN_NOTIFICATIONS or not ADMIN_CHAT_ID:
+        return
+    
+    try:
+        notification_text = f"""✅ <b>Verification Success</b>
+
+👤 <b>User:</b> @{username} (ID: {user_id})
+💎 <b>NFTs Found:</b> {nft_count}
+💰 <b>Wallet:</b> {wallet_address[:8]}...{wallet_address[-8:] if wallet_address else 'N/A'}
+⏰ <b>Time:</b> {time.strftime('%Y-%m-%d %H:%M:%S')}
+
+🎉 User has been granted access to the group!"""
+
+        await app.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=notification_text,
+            parse_mode='HTML'
+        )
+        print(f"📢 Admin notified: {username} verification success")
+        
+    except Exception as e:
+        print(f"❌ Error notifying admin: {e}")
+
+async def notify_admin_verification_failed(user_id: int, username: str, reason: str, wallet_address: str = None):
+    """Notify admin about failed verification"""
+    if not ADMIN_NOTIFICATIONS or not ADMIN_CHAT_ID:
+        return
+    
+    try:
+        notification_text = f"""❌ <b>Verification Failed</b>
+
+👤 <b>User:</b> @{username} (ID: {user_id})
+🚫 <b>Reason:</b> {reason}
+💰 <b>Wallet:</b> {wallet_address[:8]}...{wallet_address[-8:] if wallet_address else 'N/A'}
+⏰ <b>Time:</b> {time.strftime('%Y-%m-%d %H:%M:%S')}
+
+😔 User has been removed from the group."""
+
+        await app.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=notification_text,
+            parse_mode='HTML'
+        )
+        print(f"📢 Admin notified: {username} verification failed")
+        
+    except Exception as e:
+        print(f"❌ Error notifying admin: {e}")
+
+async def notify_admin_user_joined(user_id: int, username: str):
+    """Notify admin when user joins group"""
+    if not ADMIN_NOTIFICATIONS or not ADMIN_CHAT_ID:
+        return
+    
+    try:
+        notification_text = f"""👋 <b>New User Joined</b>
+
+👤 <b>User:</b> @{username} (ID: {user_id})
+⏰ <b>Time:</b> {time.strftime('%Y-%m-%d %H:%M:%S')}
+⏳ <b>Status:</b> Pending verification (5 min timer started)
+
+🔗 Verification link sent to group."""
+
+        await app.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=notification_text,
+            parse_mode='HTML'
+        )
+        print(f"📢 Admin notified: {username} joined group")
+        
+    except Exception as e:
+        print(f"❌ Error notifying admin: {e}")
 
 async def auto_remove_unverified(user_id, username, context):
     """Auto-remove user if not verified within 5 minutes"""
@@ -56,6 +134,9 @@ async def auto_remove_unverified(user_id, username, context):
             
             print(f"❌ Removed @{username} (ID: {user_id}) - verification timeout")
             del user_pending_verification[user_id]
+            
+            # Notify admin about timeout removal
+            await notify_admin_verification_failed(user_id, username, "Verification timeout (5 minutes)", None)
             
         except Exception as e:
             print(f"Error removing user: {e}")
@@ -140,6 +221,9 @@ Need help? Contact an admin!"""
                 # Start auto-remove timer
                 asyncio.create_task(auto_remove_unverified(user_id, username, context))
                 
+                # Notify admin about new user
+                asyncio.create_task(notify_admin_user_joined(user_id, username))
+                
             except Exception as e:
                 print(f"❌ Error sending message to group: {e}")
                 print(f"🔍 Error details: {type(e).__name__}: {str(e)}")
@@ -217,6 +301,75 @@ async def analytics(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Error reading analytics: {e}")
 
+async def admin_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command to control notification settings"""
+    try:
+        user = update.effective_user
+        chat = update.effective_chat
+        
+        # Only allow group admins
+        member = await context.bot.get_chat_member(chat.id, user.id)
+        if member.status not in ["administrator", "creator"]:
+            await update.message.reply_text("❌ Only group admins can use this command.")
+            return
+        
+        # Check current notification status
+        status_text = f"""📢 <b>Admin Notification Settings</b>
+
+🔔 <b>Status:</b> {'✅ Enabled' if ADMIN_NOTIFICATIONS else '❌ Disabled'}
+👤 <b>Admin Chat ID:</b> {ADMIN_CHAT_ID or 'Not set'}
+📊 <b>Pending Verifications:</b> {len(user_pending_verification)}
+
+<b>Commands:</b>
+/notifications_on - Enable notifications
+/notifications_off - Disable notifications
+/notifications_status - Show this status"""
+
+        await update.message.reply_text(status_text, parse_mode='HTML')
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {str(e)}")
+
+async def notifications_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Enable admin notifications"""
+    try:
+        user = update.effective_user
+        chat = update.effective_chat
+        
+        # Only allow group admins
+        member = await context.bot.get_chat_member(chat.id, user.id)
+        if member.status not in ["administrator", "creator"]:
+            await update.message.reply_text("❌ Only group admins can use this command.")
+            return
+        
+        global ADMIN_NOTIFICATIONS
+        ADMIN_NOTIFICATIONS = True
+        
+        await update.message.reply_text("✅ Admin notifications enabled!")
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {str(e)}")
+
+async def notifications_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Disable admin notifications"""
+    try:
+        user = update.effective_user
+        chat = update.effective_chat
+        
+        # Only allow group admins
+        member = await context.bot.get_chat_member(chat.id, user.id)
+        if member.status not in ["administrator", "creator"]:
+            await update.message.reply_text("❌ Only group admins can use this command.")
+            return
+        
+        global ADMIN_NOTIFICATIONS
+        ADMIN_NOTIFICATIONS = False
+        
+        await update.message.reply_text("❌ Admin notifications disabled!")
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {str(e)}")
+
 # Webhook endpoints
 @flask_app.route('/verify_callback', methods=['POST'])
 def verify_callback():
@@ -268,6 +421,11 @@ Welcome to the Meta Betties community! 🚀"""
                     print(f"✅ User @{username} (ID: {tg_id}) verified successfully - KEPT IN GROUP")
                     del user_pending_verification[tg_id]
                     
+                    # Notify admin about successful verification
+                    wallet_address = data.get('wallet_address', 'N/A')
+                    nft_count = data.get('nft_count', 0)
+                    asyncio.run(notify_admin_verification_success(tg_id, username, nft_count, wallet_address))
+                    
                 except Exception as e:
                     print(f"❌ Error sending success message: {e}")
                     
@@ -309,6 +467,10 @@ You will be removed from the group now."""
                     print(f"❌ Removed @{username} (ID: {tg_id}) - no required NFT")
                     del user_pending_verification[tg_id]
                     
+                    # Notify admin about failed verification
+                    wallet_address = data.get('wallet_address', 'N/A')
+                    asyncio.run(notify_admin_verification_failed(tg_id, username, "No NFTs found", wallet_address))
+                    
                 except Exception as e:
                     print(f"❌ Error removing user: {e}")
         else:
@@ -334,6 +496,9 @@ app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("analytics", analytics))
 app.add_handler(CommandHandler("test", test_message))  # Add test command
+app.add_handler(CommandHandler("notifications_status", admin_notifications))
+app.add_handler(CommandHandler("notifications_on", notifications_on))
+app.add_handler(CommandHandler("notifications_off", notifications_off))
 
 # Add message handler for all text messages
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, test_message))
