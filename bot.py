@@ -13,7 +13,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = os.getenv("GROUP_ID")
 HELIUS_API_KEY = os.getenv("HELIUS_API_KEY", "6873bd5e-0b5d-49c4-a9ab-4e7febfd9cd3")
 COLLECTION_ID = os.getenv("COLLECTION_ID", "j7qeFNnpWTbaf5g9sMCxP2zfKrH5QFgE56SuYjQDQi1")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://meta-betties-api-server.onrender.com/api/verify-nft")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://api-server-wcjc.onrender.com/api/verify-nft")
 
 user_pending_verification = {}
 
@@ -148,3 +148,4 @@ except Exception as e:
     print("💡 If problem persists, try restarting your computer.")
     print("💡 You can also try using a different bot token temporarily.")
     print("💡 Check if another bot instance is running in another terminal.") 
+
