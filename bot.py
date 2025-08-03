@@ -31,8 +31,11 @@ if not GROUP_ID:
 print(f"🤖 Bot Configuration:")
 print(f"  📱 TELEGRAM_BOT_TOKEN: {'✅ Set' if BOT_TOKEN != 'test_token' else '❌ Missing'}")
 print(f"  👥 TELEGRAM_GROUP_ID: {'✅ Set' if GROUP_ID != 'test_group' else '❌ Missing'}")
+print(f"  📢 ADMIN_CHAT_ID: {'✅ Set' if ADMIN_CHAT_ID else '❌ Missing'}")
+print(f"  🔔 ADMIN_NOTIFICATIONS: {'✅ Enabled' if ADMIN_NOTIFICATIONS else '❌ Disabled'}")
 
 user_pending_verification = {}
+verified_users = {}  # Track verified users but allow re-verification
 
 # Flask app for webhook
 flask_app = Flask(__name__)
@@ -65,7 +68,14 @@ async def notify_admin_verification_success(user_id: int, username: str, nft_cou
 
 async def notify_admin_verification_failed(user_id: int, username: str, reason: str, wallet_address: str = None):
     """Notify admin about failed verification - INSTANT"""
+    print(f"🔍 notify_admin_verification_failed called:")
+    print(f"  📢 ADMIN_CHAT_ID: {ADMIN_CHAT_ID}")
+    print(f"  🔔 ADMIN_NOTIFICATIONS: {ADMIN_NOTIFICATIONS}")
+    print(f"  👤 User: {username} (ID: {user_id})")
+    print(f"  🚫 Reason: {reason}")
+    
     if not ADMIN_NOTIFICATIONS or not ADMIN_CHAT_ID:
+        print(f"❌ Admin notification skipped - ADMIN_NOTIFICATIONS: {ADMIN_NOTIFICATIONS}, ADMIN_CHAT_ID: {ADMIN_CHAT_ID}")
         return
     
     try:
@@ -90,7 +100,7 @@ async def notify_admin_verification_failed(user_id: int, username: str, reason: 
         print(f"❌ Error notifying admin: {e}")
 
 async def notify_admin_user_joined(user_id: int, username: str):
-    """Notify admin when user joins group - INSTANT"""
+    """Notify admin about new user joining - INSTANT"""
     if not ADMIN_NOTIFICATIONS or not ADMIN_CHAT_ID:
         return
     
@@ -100,8 +110,7 @@ async def notify_admin_user_joined(user_id: int, username: str):
 👤 <b>User:</b> @{username} (ID: {user_id})
 ⏰ <b>Time:</b> {time.strftime('%Y-%m-%d %H:%M:%S')}
 ⏳ <b>Status:</b> Pending verification (5 min timer started)
-
-🔗 Verification link sent to group."""
+🔗 <b>Verification link sent to group.</b>"""
 
         # Send notification immediately without any delay
         await app.bot.send_message(
@@ -174,10 +183,10 @@ async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             print(f"✅ Processing human member: @{username} (ID: {user_id})")
             
-            # Check if user is already pending verification
+            # Allow multiple verifications - remove old pending status
             if user_id in user_pending_verification:
-                print(f"⚠️ User @{username} already pending verification")
-                return
+                print(f"🔄 User @{username} already pending - allowing new verification")
+                del user_pending_verification[user_id]
             
             # Create verification link - UPDATE THIS URL
             verify_link = f"https://admin-q2j7.onrender.com/?tg_id={user_id}"
@@ -202,6 +211,8 @@ To access this private group, you must verify your NFT ownership.
 ⏰ <b>Time Limit:</b> You have 5 minutes to complete verification, or you'll be automatically removed.
 
 💎 <b>Supported Wallets:</b> Phantom, Solflare, Backpack, Slope, Glow, Clover, Coinbase, Exodus, Brave, Torus, Trust Wallet, Zerion
+
+🔄 <b>Multiple Verifications:</b> You can verify multiple times with the same Telegram ID.
 
 Need help? Contact an admin!"""
 
@@ -380,6 +391,60 @@ async def notifications_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
+async def test_admin_notification(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Test admin notification system"""
+    try:
+        user = update.effective_user
+        chat = update.effective_chat
+        
+        # Only allow group admins
+        member = await context.bot.get_chat_member(chat.id, user.id)
+        if member.status not in ["administrator", "creator"]:
+            await update.message.reply_text("❌ Only group admins can use this command.")
+            return
+        
+        # Check notification settings
+        status_text = f"""🧪 <b>Admin Notification Test</b>
+
+📢 <b>ADMIN_CHAT_ID:</b> {ADMIN_CHAT_ID or 'Not set'}
+🔔 <b>ADMIN_NOTIFICATIONS:</b> {ADMIN_NOTIFICATIONS}
+👤 <b>Your Chat ID:</b> {chat.id}
+👤 <b>Your User ID:</b> {user.id}
+
+<b>Test Results:</b>"""
+
+        if not ADMIN_CHAT_ID:
+            status_text += "\n❌ ADMIN_CHAT_ID not set"
+        elif not ADMIN_NOTIFICATIONS:
+            status_text += "\n❌ ADMIN_NOTIFICATIONS disabled"
+        else:
+            status_text += "\n✅ Settings look good"
+            
+            # Send test notification
+            try:
+                test_message = f"""🧪 <b>Test Notification</b>
+
+👤 <b>Test User:</b> @{user.username or user.first_name}
+⏰ <b>Time:</b> {time.strftime('%Y-%m-%d %H:%M:%S')}
+🔧 <b>Type:</b> Manual test
+
+This is a test notification to verify the admin notification system is working."""
+
+                await app.bot.send_message(
+                    chat_id=ADMIN_CHAT_ID,
+                    text=test_message,
+                    parse_mode='HTML'
+                )
+                status_text += "\n✅ Test notification sent successfully!"
+                
+            except Exception as e:
+                status_text += f"\n❌ Error sending test notification: {e}"
+
+        await update.message.reply_text(status_text, parse_mode='HTML')
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Test failed: {str(e)}")
+
 # Webhook endpoints
 @flask_app.route('/verify_callback', methods=['POST'])
 def verify_callback():
@@ -389,18 +454,26 @@ def verify_callback():
         tg_id = data.get('tg_id')
         has_nft = data.get('has_nft')
         username = data.get('username', f'user_{tg_id}')
+        wallet_address = data.get('wallet_address', 'N/A')
+        nft_count = data.get('nft_count', 0)
         
         print(f"🔍 Verification callback received:")
         print(f"  👤 User ID: {tg_id}")
         print(f"  👤 Username: {username}")
         print(f"  🎨 Has NFT: {has_nft}")
+        print(f"  💎 NFT Count: {nft_count}")
+        print(f"  💰 Wallet: {wallet_address}")
+        print(f"  📢 ADMIN_CHAT_ID: {ADMIN_CHAT_ID}")
+        print(f"  🔔 ADMIN_NOTIFICATIONS: {ADMIN_NOTIFICATIONS}")
         
-        if tg_id in user_pending_verification:
-            if has_nft:
-                # User has NFT - keep them in group
-                try:
-                    # Send success message to group
-                    success_message = f"""✅ <b>Verification Successful!</b>
+        # Allow multiple verifications - check if user is in group
+        user_in_group = True  # Assume user is in group for verification
+        
+        if has_nft:
+            # User has NFT - keep them in group
+            try:
+                # Send success message to group
+                success_message = f"""✅ <b>Verification Successful!</b>
 
 🎉 Congratulations @{username}! 
 
@@ -408,87 +481,101 @@ def verify_callback():
 
 🔐 <b>Access Granted:</b> You can now participate in all discussions and access exclusive content.
 
+🔄 <b>Multiple Verifications:</b> You can verify again anytime with the same Telegram ID.
+
 Welcome to the Meta Betties community! 🚀"""
 
-                    asyncio.run(app.bot.send_message(
-                        chat_id=GROUP_ID,
-                        text=success_message,
-                        parse_mode='HTML'
-                    ))
-                    
-                    # Log successful verification
-                    log_entry = {
-                        "timestamp": time.time(),
-                        "user_id": tg_id,
-                        "username": username,
-                        "status": "verified",
-                        "reason": "nft_verified"
-                    }
-                    
-                    with open("analytics.json", "a") as f:
-                        f.write(json.dumps(log_entry) + "\n")
-                    
-                    print(f"✅ User @{username} (ID: {tg_id}) verified successfully - KEPT IN GROUP")
+                asyncio.run(app.bot.send_message(
+                    chat_id=GROUP_ID,
+                    text=success_message,
+                    parse_mode='HTML'
+                ))
+                
+                # Log successful verification
+                log_entry = {
+                    "timestamp": time.time(),
+                    "user_id": tg_id,
+                    "username": username,
+                    "status": "verified",
+                    "reason": "nft_verified",
+                    "nft_count": nft_count,
+                    "wallet_address": wallet_address
+                }
+                
+                with open("analytics.json", "a") as f:
+                    f.write(json.dumps(log_entry) + "\n")
+                
+                print(f"✅ User @{username} (ID: {tg_id}) verified successfully - KEPT IN GROUP")
+                
+                # Remove from pending but allow future verifications
+                if tg_id in user_pending_verification:
                     del user_pending_verification[tg_id]
-                    
-                    # INSTANT admin notification - no delay
-                    wallet_address = data.get('wallet_address', 'N/A')
-                    nft_count = data.get('nft_count', 0)
-                    # Send notification immediately
-                    asyncio.create_task(notify_admin_verification_success(tg_id, username, nft_count, wallet_address))
-                    
-                except Exception as e:
-                    print(f"❌ Error sending success message: {e}")
-                    
-            else:
-                # User has no NFT - remove them from group
-                try:
-                    # Send removal message to group
-                    removal_message = f"""❌ <b>Verification Failed</b>
+                
+                # Track as verified but allow re-verification
+                verified_users[tg_id] = {
+                    "username": username,
+                    "verified_at": time.time(),
+                    "nft_count": nft_count,
+                    "wallet_address": wallet_address
+                }
+                
+                # INSTANT admin notification - no delay
+                asyncio.create_task(notify_admin_verification_success(tg_id, username, nft_count, wallet_address))
+                
+            except Exception as e:
+                print(f"❌ Error sending success message: {e}")
+                
+        else:
+            # User has no NFT - remove them from group
+            try:
+                # Send removal message to group
+                removal_message = f"""❌ <b>Verification Failed</b>
 
 😔 Sorry @{username}, your verification was unsuccessful.
 
 🚫 <b>Access Denied:</b> You do not have the required NFT to access this private group.
 
-💎 <b>Requirements:</b> You must own the required NFT collection to join this group.
+💎 <b>Requirements:</b> You must own at least one NFT to join this group.
+
+🔄 <b>Try Again:</b> You can try again anytime by rejoining the group.
 
 You will be removed from the group now."""
 
-                    asyncio.run(app.bot.send_message(
-                        chat_id=GROUP_ID,
-                        text=removal_message,
-                        parse_mode='HTML'
-                    ))
-                    
-                    # Remove user from group
-                    asyncio.run(app.bot.ban_chat_member(GROUP_ID, tg_id))
-                    asyncio.run(app.bot.unban_chat_member(GROUP_ID, tg_id))
-                    
-                    log_entry = {
-                        "timestamp": time.time(),
-                        "user_id": tg_id,
-                        "username": username,
-                        "status": "removed",
-                        "reason": "no_nft"
-                    }
-                    
-                    with open("analytics.json", "a") as f:
-                        f.write(json.dumps(log_entry) + "\n")
-                    
-                    print(f"❌ Removed @{username} (ID: {tg_id}) - no required NFT")
+                asyncio.run(app.bot.send_message(
+                    chat_id=GROUP_ID,
+                    text=removal_message,
+                    parse_mode='HTML'
+                ))
+                
+                # Remove user from group
+                asyncio.run(app.bot.ban_chat_member(GROUP_ID, tg_id))
+                asyncio.run(app.bot.unban_chat_member(GROUP_ID, tg_id))
+                
+                log_entry = {
+                    "timestamp": time.time(),
+                    "user_id": tg_id,
+                    "username": username,
+                    "status": "removed",
+                    "reason": "no_nft",
+                    "wallet_address": wallet_address
+                }
+                
+                with open("analytics.json", "a") as f:
+                    f.write(json.dumps(log_entry) + "\n")
+                
+                print(f"❌ Removed @{username} (ID: {tg_id}) - no required NFT")
+                
+                # Remove from pending
+                if tg_id in user_pending_verification:
                     del user_pending_verification[tg_id]
-                    
-                    # INSTANT admin notification - no delay
-                    wallet_address = data.get('wallet_address', 'N/A')
-                    # Send notification immediately
-                    asyncio.create_task(notify_admin_verification_failed(tg_id, username, "No NFTs found", wallet_address))
-                    
-                except Exception as e:
-                    print(f"❌ Error removing user: {e}")
-        else:
-            print(f"⚠️ User {tg_id} not in pending verification list")
+                
+                # INSTANT admin notification - no delay
+                asyncio.create_task(notify_admin_verification_failed(tg_id, username, "No NFTs found", wallet_address))
+                
+            except Exception as e:
+                print(f"❌ Error removing user: {e}")
         
-        return jsonify({"status": "success", "message": "Verification result processed"})
+        return jsonify({"status": "success", "message": "Verification processed"})
         
     except Exception as e:
         print(f"❌ Error in verify_callback: {e}")
@@ -511,6 +598,7 @@ app.add_handler(CommandHandler("test", test_message))  # Add test command
 app.add_handler(CommandHandler("notifications_status", admin_notifications))
 app.add_handler(CommandHandler("notifications_on", notifications_on))
 app.add_handler(CommandHandler("notifications_off", notifications_off))
+app.add_handler(CommandHandler("test_admin_notification", test_admin_notification)) # Add test admin notification command
 
 # Add message handler for all text messages
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, test_message))
