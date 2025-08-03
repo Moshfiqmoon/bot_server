@@ -729,56 +729,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 app.add_error_handler(error_handler)
 print("✅ Error handler added successfully")
 
-print("🤖 Bot running...")
-
-# Start the bot with error handling
-try:
-    print("🤖 Starting bot with conflict protection...")
-    
-    # Clear any pending updates first
-    try:
-        app.bot.delete_webhook(drop_pending_updates=True)
-        print("✅ Webhook cleared successfully")
-    except Exception as e:
-        print(f"⚠️ Warning: Could not clear webhook: {e}")
-    
-    # Add a small delay to ensure webhook is cleared
-    time.sleep(2)
-    
-    # Check if bot is already running
-    try:
-        bot_info = asyncio.run(app.bot.get_me())
-        print(f"✅ Bot info retrieved: @{bot_info.username}")
-    except Exception as e:
-        print(f"❌ Error getting bot info: {e}")
-        print("💡 This might indicate another instance is running")
-        print("💡 Exiting to prevent conflicts...")
-        import sys
-        sys.exit(1)
-    
-    print("🔄 Starting polling with conflict protection...")
-    app.run_polling(
-        drop_pending_updates=True,
-        allowed_updates=["message", "callback_query"],
-        read_timeout=30,
-        write_timeout=30,
-        connect_timeout=30,
-        pool_timeout=30,
-        bootstrap_retries=5,
-        close_loop=False
-    )
-except Exception as e:
-    print(f"❌ Error starting bot: {e}")
-    print("💡 Please make sure only one bot instance is running.")
-    print("💡 Try stopping all Python processes and restart.")
-    print("💡 If problem persists, try restarting your computer.")
-    print("💡 You can also try using a different bot token temporarily.")
-    print("💡 Check if another bot instance is running in another terminal.")
-    print("💡 Common solutions:")
-    print("   1. Stop all Python processes: pkill python")
-    print("   2. Restart your hosting platform")
-    print("   3. Check for duplicate bot files")
-    print("   4. Use different bot token for testing")
+print("�� Bot running...")
 
 def run_flask():
     """Run Flask server in a separate thread"""
@@ -792,4 +743,26 @@ if __name__ == '__main__':
     flask_thread.start()
     
     # Start the bot
-    print("🤖 Starting bot with webhook support...") 
+    print("🤖 Starting bot with webhook support...")
+    
+    # Run the main bot function
+    try:
+        # Create and run the event loop properly
+        async def main_bot():
+            await app.initialize()
+            await app.start()
+            await app.run_polling(
+                drop_pending_updates=True,
+                allowed_updates=["message", "callback_query"],
+                close_loop=False
+            )
+        
+        # Run the bot with proper event loop
+        asyncio.run(main_bot())
+        
+    except KeyboardInterrupt:
+        print("\n⏹️ Bot stopped by user")
+    except Exception as e:
+        print(f"❌ Error in main bot loop: {e}")
+        import traceback
+        traceback.print_exc() 
