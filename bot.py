@@ -7,8 +7,46 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filte
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 import threading
+import sys
 
 load_dotenv()
+
+# Process lock to prevent multiple instances
+LOCK_FILE = "bot_server.lock"
+
+def create_lock():
+    """Create a lock file to prevent multiple instances"""
+    try:
+        if os.path.exists(LOCK_FILE):
+            print(f"❌ Lock file {LOCK_FILE} exists. Another instance might be running.")
+            print("💡 If you're sure no other instance is running, delete the lock file.")
+            return False
+        
+        with open(LOCK_FILE, 'w') as f:
+            f.write(str(os.getpid()))
+        print(f"✅ Lock file created: {LOCK_FILE}")
+        return True
+    except Exception as e:
+        print(f"❌ Error creating lock file: {e}")
+        return False
+
+def remove_lock():
+    """Remove the lock file"""
+    try:
+        if os.path.exists(LOCK_FILE):
+            os.remove(LOCK_FILE)
+            print(f"✅ Lock file removed: {LOCK_FILE}")
+    except Exception as e:
+        print(f"⚠️ Error removing lock file: {e}")
+
+# Create lock at startup
+if not create_lock():
+    print("💡 Exiting to prevent conflicts...")
+    sys.exit(1)
+
+# Cleanup lock file on exit
+import atexit
+atexit.register(remove_lock)
 
 # Environment variables - Fixed names
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")  # Changed from BOT_TOKEN
@@ -124,8 +162,8 @@ async def notify_admin_user_joined(user_id: int, username: str):
         print(f"❌ Error notifying admin: {e}")
 
 async def auto_remove_unverified(user_id, username, context):
-    """Auto-remove user if not verified within 5 minutes"""
-    await asyncio.sleep(300)  # 5 minutes
+    """Auto-remove user if not verified within 10 minutes"""
+    await asyncio.sleep(600)  # 10 minutes (increased from 5 minutes)
     
     if user_id in user_pending_verification:
         try:
@@ -148,7 +186,7 @@ async def auto_remove_unverified(user_id, username, context):
             del user_pending_verification[user_id]
             
             # INSTANT admin notification for timeout
-            await notify_admin_verification_failed(user_id, username, "Verification timeout (5 minutes)", None)
+            await notify_admin_verification_failed(user_id, username, "Verification timeout (10 minutes)", None)
             
         except Exception as e:
             print(f"Error removing user: {e}")
@@ -208,7 +246,7 @@ To access this private group, you must verify your NFT ownership.
 📋 <b>Or copy this link:</b>
 <code>{verify_link}</code>
 
-⏰ <b>Time Limit:</b> You have 5 minutes to complete verification, or you'll be automatically removed.
+⏰ <b>Time Limit:</b> You have 10 minutes to complete verification, or you'll be automatically removed.
 
 💎 <b>Supported Wallets:</b> Phantom, Solflare, Backpack, Slope, Glow, Clover, Coinbase, Exodus, Brave, Torus, Trust Wallet, Zerion
 
@@ -392,58 +430,72 @@ async def notifications_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
 async def test_admin_notification(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Test admin notification system"""
+    """Test admin notification functionality"""
     try:
-        user = update.effective_user
-        chat = update.effective_chat
-        
-        # Only allow group admins
-        member = await context.bot.get_chat_member(chat.id, user.id)
-        if member.status not in ["administrator", "creator"]:
-            await update.message.reply_text("❌ Only group admins can use this command.")
+        # Check if user is admin
+        user_id = update.effective_user.id
+        if str(user_id) != str(ADMIN_CHAT_ID):
+            await update.message.reply_text("❌ This command is only for admins.")
             return
         
-        # Check notification settings
-        status_text = f"""🧪 <b>Admin Notification Test</b>
-
-📢 <b>ADMIN_CHAT_ID:</b> {ADMIN_CHAT_ID or 'Not set'}
-🔔 <b>ADMIN_NOTIFICATIONS:</b> {ADMIN_NOTIFICATIONS}
-👤 <b>Your Chat ID:</b> {chat.id}
-👤 <b>Your User ID:</b> {user.id}
-
-<b>Test Results:</b>"""
-
-        if not ADMIN_CHAT_ID:
-            status_text += "\n❌ ADMIN_CHAT_ID not set"
-        elif not ADMIN_NOTIFICATIONS:
-            status_text += "\n❌ ADMIN_NOTIFICATIONS disabled"
-        else:
-            status_text += "\n✅ Settings look good"
-            
-            # Send test notification
-            try:
-                test_message = f"""🧪 <b>Test Notification</b>
-
-👤 <b>Test User:</b> @{user.username or user.first_name}
-⏰ <b>Time:</b> {time.strftime('%Y-%m-%d %H:%M:%S')}
-🔧 <b>Type:</b> Manual test
-
-This is a test notification to verify the admin notification system is working."""
-
-                await app.bot.send_message(
-                    chat_id=ADMIN_CHAT_ID,
-                    text=test_message,
-                    parse_mode='HTML'
-                )
-                status_text += "\n✅ Test notification sent successfully!"
-                
-            except Exception as e:
-                status_text += f"\n❌ Error sending test notification: {e}"
-
-        await update.message.reply_text(status_text, parse_mode='HTML')
+        # Test notification
+        await notify_admin_verification_success(123456789, "test_user", 5, "test_wallet")
+        await update.message.reply_text("✅ Test admin notification sent!")
         
     except Exception as e:
-        await update.message.reply_text(f"❌ Test failed: {str(e)}")
+        print(f"❌ Error in test_admin_notification: {e}")
+        await update.message.reply_text(f"❌ Error: {e}")
+
+async def add_verified_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Add a verified user to the group (admin command)"""
+    try:
+        # Check if user is admin
+        user_id = update.effective_user.id
+        if str(user_id) != str(ADMIN_CHAT_ID):
+            await update.message.reply_text("❌ This command is only for admins.")
+            return
+        
+        # Get user ID from command
+        if not context.args:
+            await update.message.reply_text("❌ Usage: /add_user <user_id>")
+            return
+        
+        target_user_id = int(context.args[0])
+        
+        # Check if user is verified
+        if target_user_id in verified_users:
+            try:
+                # Try to unban user first
+                await context.bot.unban_chat_member(GROUP_ID, target_user_id)
+                print(f"✅ Unbanned user {target_user_id}")
+                
+                # Send success message
+                await update.message.reply_text(f"✅ User {target_user_id} has been added to the group.")
+                
+                # Send welcome message to group
+                username = verified_users[target_user_id].get("username", f"user_{target_user_id}")
+                welcome_message = f"""✅ <b>User Added Manually</b>
+
+👤 <b>User:</b> @{username} (ID: {target_user_id})
+💎 <b>NFT Count:</b> {verified_users[target_user_id].get("nft_count", 0)}
+⏰ <b>Verified:</b> {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(verified_users[target_user_id].get("verified_at", time.time())))}
+
+Welcome to the Meta Betties community! 🚀"""
+
+                await context.bot.send_message(
+                    chat_id=GROUP_ID,
+                    text=welcome_message,
+                    parse_mode='HTML'
+                )
+                
+            except Exception as e:
+                await update.message.reply_text(f"❌ Error adding user: {e}")
+        else:
+            await update.message.reply_text(f"❌ User {target_user_id} is not verified. They need to complete verification first.")
+        
+    except Exception as e:
+        print(f"❌ Error in add_verified_user: {e}")
+        await update.message.reply_text(f"❌ Error: {e}")
 
 # Webhook endpoints
 @flask_app.route('/verify_callback', methods=['POST'])
@@ -465,31 +517,97 @@ def verify_callback():
         print(f"  💰 Wallet: {wallet_address}")
         print(f"  📢 ADMIN_CHAT_ID: {ADMIN_CHAT_ID}")
         print(f"  🔔 ADMIN_NOTIFICATIONS: {ADMIN_NOTIFICATIONS}")
+        print(f"  🏠 GROUP_ID: {GROUP_ID}")
         
-        # Allow multiple verifications - check if user is in group
-        user_in_group = True  # Assume user is in group for verification
+        # Immediately remove from pending verification to prevent auto-remove timer interference
+        if tg_id in user_pending_verification:
+            print(f"⏰ Removing @{username} from pending verification (callback received)")
+            del user_pending_verification[tg_id]
+        
+        # Check bot permissions in the group
+        try:
+            bot_member = asyncio.run(app.bot.get_chat_member(GROUP_ID, app.bot.id))
+            print(f"  🤖 Bot status in group: {bot_member.status}")
+            print(f"  🔐 Bot can invite users: {bot_member.can_invite_users if hasattr(bot_member, 'can_invite_users') else 'Unknown'}")
+            print(f"  🚫 Bot can ban users: {bot_member.can_restrict_members if hasattr(bot_member, 'can_restrict_members') else 'Unknown'}")
+        except Exception as perm_error:
+            print(f"  ❌ Could not check bot permissions: {perm_error}")
         
         if has_nft:
-            # User has NFT - keep them in group
+            # User has NFT - add them to group and send success message
             try:
-                # Send success message to group
-                success_message = f"""✅ <b>Verification Successful!</b>
+                # First, try to invite the user to the group
+                try:
+                    # Unban user first in case they were banned during verification
+                    asyncio.run(app.bot.unban_chat_member(GROUP_ID, tg_id))
+                    print(f"✅ Unbanned user @{username} (ID: {tg_id})")
+                except Exception as unban_error:
+                    print(f"⚠️ Could not unban user (may not be banned): {unban_error}")
+                
+                # Try to invite user to group
+                try:
+                    # First check if user is already in the group
+                    try:
+                        chat_member = asyncio.run(app.bot.get_chat_member(GROUP_ID, tg_id))
+                        if chat_member.status in ['member', 'administrator', 'creator']:
+                            print(f"✅ User @{username} is already in the group")
+                        else:
+                            print(f"⚠️ User @{username} is not a member (status: {chat_member.status})")
+                    except Exception as member_error:
+                        print(f"⚠️ Could not check user membership: {member_error}")
+                    
+                    # Try to create invite link
+                    invite_link = asyncio.run(app.bot.create_chat_invite_link(
+                        chat_id=GROUP_ID,
+                        creates_join_request=False
+                    ))
+                    print(f"🔗 Created invite link for @{username}")
+                    
+                    # Send success message to group
+                    success_message = f"""✅ <b>Verification Successful!</b>
 
 🎉 Congratulations @{username}! 
 
-💎 You have been verified as an NFT holder and now have full access to this private group.
+💎 You have been verified as an NFT holder.
 
-🔐 <b>Access Granted:</b> You can now participate in all discussions and access exclusive content.
+🔐 <b>Access Granted:</b> You should now have access to this private group.
 
 🔄 <b>Multiple Verifications:</b> You can verify again anytime with the same Telegram ID.
 
+📱 <b>If you were removed during verification:</b> You can rejoin the group using the link in your verification page.
+
 Welcome to the Meta Betties community! 🚀"""
 
-                asyncio.run(app.bot.send_message(
-                    chat_id=GROUP_ID,
-                    text=success_message,
-                    parse_mode='HTML'
-                ))
+                    asyncio.run(app.bot.send_message(
+                        chat_id=GROUP_ID,
+                        text=success_message,
+                        parse_mode='HTML'
+                    ))
+                    
+                    print(f"✅ Success message sent to group for @{username}")
+                    
+                except Exception as invite_error:
+                    print(f"❌ Could not create invite link: {invite_error}")
+                    # Send success message anyway
+                    success_message = f"""✅ <b>Verification Successful!</b>
+
+🎉 Congratulations @{username}! 
+
+💎 You have been verified as an NFT holder.
+
+🔐 <b>Access Granted:</b> You should now have access to this private group.
+
+🔄 <b>Multiple Verifications:</b> You can verify again anytime with the same Telegram ID.
+
+📱 <b>If you were removed during verification:</b> You can rejoin the group using the link in your verification page.
+
+Welcome to the Meta Betties community! 🚀"""
+
+                    asyncio.run(app.bot.send_message(
+                        chat_id=GROUP_ID,
+                        text=success_message,
+                        parse_mode='HTML'
+                    ))
                 
                 # Log successful verification
                 log_entry = {
@@ -505,11 +623,7 @@ Welcome to the Meta Betties community! 🚀"""
                 with open("analytics.json", "a") as f:
                     f.write(json.dumps(log_entry) + "\n")
                 
-                print(f"✅ User @{username} (ID: {tg_id}) verified successfully - KEPT IN GROUP")
-                
-                # Remove from pending but allow future verifications
-                if tg_id in user_pending_verification:
-                    del user_pending_verification[tg_id]
+                print(f"✅ User @{username} (ID: {tg_id}) verified successfully - ACCESS GRANTED")
                 
                 # Track as verified but allow re-verification
                 verified_users[tg_id] = {
@@ -523,7 +637,7 @@ Welcome to the Meta Betties community! 🚀"""
                 asyncio.create_task(notify_admin_verification_success(tg_id, username, nft_count, wallet_address))
                 
             except Exception as e:
-                print(f"❌ Error sending success message: {e}")
+                print(f"❌ Error processing successful verification: {e}")
                 
         else:
             # User has no NFT - remove them from group
@@ -548,8 +662,12 @@ You will be removed from the group now."""
                 ))
                 
                 # Remove user from group
-                asyncio.run(app.bot.ban_chat_member(GROUP_ID, tg_id))
-                asyncio.run(app.bot.unban_chat_member(GROUP_ID, tg_id))
+                try:
+                    asyncio.run(app.bot.ban_chat_member(GROUP_ID, tg_id))
+                    asyncio.run(app.bot.unban_chat_member(GROUP_ID, tg_id))
+                    print(f"❌ Removed @{username} (ID: {tg_id}) - no required NFT")
+                except Exception as remove_error:
+                    print(f"⚠️ Could not remove user (may not be in group): {remove_error}")
                 
                 log_entry = {
                     "timestamp": time.time(),
@@ -562,12 +680,6 @@ You will be removed from the group now."""
                 
                 with open("analytics.json", "a") as f:
                     f.write(json.dumps(log_entry) + "\n")
-                
-                print(f"❌ Removed @{username} (ID: {tg_id}) - no required NFT")
-                
-                # Remove from pending
-                if tg_id in user_pending_verification:
-                    del user_pending_verification[tg_id]
                 
                 # INSTANT admin notification - no delay
                 asyncio.create_task(notify_admin_verification_failed(tg_id, username, "No NFTs found", wallet_address))
@@ -599,6 +711,7 @@ app.add_handler(CommandHandler("notifications_status", admin_notifications))
 app.add_handler(CommandHandler("notifications_on", notifications_on))
 app.add_handler(CommandHandler("notifications_off", notifications_off))
 app.add_handler(CommandHandler("test_admin_notification", test_admin_notification)) # Add test admin notification command
+app.add_handler(CommandHandler("add_user", add_verified_user)) # Add add_user command
 
 # Add message handler for all text messages
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, test_message))
@@ -632,6 +745,17 @@ try:
     # Add a small delay to ensure webhook is cleared
     time.sleep(2)
     
+    # Check if bot is already running
+    try:
+        bot_info = asyncio.run(app.bot.get_me())
+        print(f"✅ Bot info retrieved: @{bot_info.username}")
+    except Exception as e:
+        print(f"❌ Error getting bot info: {e}")
+        print("💡 This might indicate another instance is running")
+        print("💡 Exiting to prevent conflicts...")
+        import sys
+        sys.exit(1)
+    
     print("🔄 Starting polling with conflict protection...")
     app.run_polling(
         drop_pending_updates=True,
@@ -650,6 +774,11 @@ except Exception as e:
     print("💡 If problem persists, try restarting your computer.")
     print("💡 You can also try using a different bot token temporarily.")
     print("💡 Check if another bot instance is running in another terminal.")
+    print("💡 Common solutions:")
+    print("   1. Stop all Python processes: pkill python")
+    print("   2. Restart your hosting platform")
+    print("   3. Check for duplicate bot files")
+    print("   4. Use different bot token for testing")
 
 def run_flask():
     """Run Flask server in a separate thread"""
